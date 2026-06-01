@@ -1,0 +1,86 @@
+name: 丁香园自动阅读 (Server酱推送版)
+
+on:
+  schedule:
+    # 北京时间每小时第 9 分触发，避开 GitHub Actions 整点高峰
+    - cron: '12 * * * *'
+
+  workflow_dispatch:
+
+jobs:
+  run-dxy-task:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出代码仓库
+        uses: actions/checkout@v4
+
+      - name: 显示触发信息
+        run: |
+          echo "触发方式: ${{ github.event_name }}"
+          echo "仓库分支: ${{ github.ref }}"
+          echo "当前 UTC 时间:"
+          date -u
+          echo "当前北京时间:"
+          TZ='Asia/Shanghai' date
+
+      - name: 配置 Python 环境
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install requests playwright
+          fi
+
+      - name: 安装 Playwright 浏览器内核
+        run: |
+          python -m playwright install --with-deps chromium
+
+      - name: 检查 Secrets 是否存在
+        run: |
+          if [ -z "$DXY_COOKIE" ]; then
+            echo "❌ DXY_COOKIE 没有配置"
+            exit 1
+          else
+            echo "✅ DXY_COOKIE 已配置"
+          fi
+
+          if [ -z "$SCKEY" ]; then
+            echo "⚠️ SCKEY 没有配置，可能无法推送通知"
+          else
+            echo "✅ SCKEY 已配置"
+          fi
+        env:
+          DXY_COOKIE: ${{ secrets.DXY_COOKIE }}
+          SCKEY: ${{ secrets.SCKEY }}
+
+      - name: 运行阅读脚本
+        id: read_task
+        run: |
+          set -o pipefail
+          echo "========== 开始运行 dxy_read.py =========="
+          python dxy_read.py 2>&1 | tee output.log
+          echo "========== 脚本运行结束 =========="
+
+          echo "LOG_CONTENT<<EOF" >> $GITHUB_ENV
+          cat output.log >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+        env:
+          GITHUB_ACTIONS: true
+          TZ: Asia/Shanghai
+          DXY_COOKIE: ${{ secrets.DXY_COOKIE }}
+          SCKEY: ${{ secrets.SCKEY }}
+
+      - name: 显示最终运行日志
+        if: always()
+        run: |
+          echo "========== 最终日志 =========="
+          cat output.log || true

@@ -1,0 +1,45 @@
+name: AbleSci Auto Sign
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 22 * * *'  # UTC 22:30 → 北京时间 06:30
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run AbleSci Sign
+        id: sign
+        run: |
+          python ablesci.py > output.log
+          # 将日志内容写入环境变量，保留多行格式
+          echo "LOG_CONTENT<<EOF" >> $GITHUB_ENV
+          cat output.log >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+        env:
+          GITHUB_ACTIONS: true
+          ABLESCI_ACCOUNTS: ${{ secrets.ABLESCI_ACCOUNTS }}
+          # 选择一种通知服务 (已修复缩进)
+          SCKEY: ${{ secrets.SCKEY }}          # Server酱
+          # XZKEY: ${{ secrets.XZKEY }}        # 息知 (按需启用)
+          # PUSH_PLUS_TOKEN: ${{ secrets.PUSH_PLUS_TOKEN }} # PushPlus (按需启用)
+
+      - name: Display Log
+        run: |
+          # 使用官方推荐的表达式语法读取上一步注入的环境变量
+          echo "${{ env.LOG_CONTENT }}"

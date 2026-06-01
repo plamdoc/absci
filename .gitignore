@@ -1,0 +1,41 @@
+# Python开发环境排除规则
+.venv/
+__pycache__/
+*.py[cod]
+*.so
+.Python
+build/
+
+# IDE配置
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# 本地环境文件
+.env
+.env.local
+.env.development
+
+# 日志文件
+logs/
+*.log
+
+# 测试相关
+.coverage
+htmlcov/
+.pytest_cache/
+
+# 打包文件
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+
+# 临时文件
+*.bak
+*.tmp
+*.swp
