@@ -2,12 +2,10 @@ name: 丁香园自动阅读 (Server酱推送版)
 
 on:
   schedule:
-    # 北京时间凌晨低频运行：00:12、02:12、04:12、06:12
-    - cron: '12 16,18,20,22 * * *'
-
-    # 北京时间白天高频运行：08:12 到 23:12 每小时一次
-    - cron: '12 0-15 * * *'
-
+    # 北京时间凌晨低频运行：00:15、02:15、04:15、06:15
+    - cron: '15 16,18,20,22 * * *'
+    # 北京时间白天高频运行：08:15 到 23:15 每小时一次
+    - cron: '15 0-15 * * *'
   workflow_dispatch:
 
 jobs:
@@ -22,7 +20,6 @@ jobs:
       - name: 显示触发信息
         run: |
           echo "触发方式: ${{ github.event_name }}"
-          echo "仓库分支: ${{ github.ref }}"
           echo "当前 UTC 时间:"
           date -u
           echo "当前北京时间:"
@@ -37,53 +34,16 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          else
-            pip install requests playwright
-          fi
-
-      - name: 安装 Playwright 浏览器内核
-        run: |
+          pip install requests playwright
           python -m playwright install --with-deps chromium
 
-      - name: 检查 Secrets 是否存在
-        run: |
-          if [ -z "$DXY_COOKIE" ]; then
-            echo "❌ DXY_COOKIE 没有配置"
-            exit 1
-          else
-            echo "✅ DXY_COOKIE 已配置"
-          fi
-
-          if [ -z "$SCKEY" ]; then
-            echo "⚠️ SCKEY 没有配置，可能无法推送通知"
-          else
-            echo "✅ SCKEY 已配置"
-          fi
-        env:
-          DXY_COOKIE: ${{ secrets.DXY_COOKIE }}
-          SCKEY: ${{ secrets.SCKEY }}
-
       - name: 运行阅读脚本
-        id: read_task
-        run: |
-          set -o pipefail
-          echo "========== 开始运行 dxy_read.py =========="
-          python dxy_read.py 2>&1 | tee output.log
-          echo "========== 脚本运行结束 =========="
-
-          echo "LOG_CONTENT<<EOF" >> $GITHUB_ENV
-          cat output.log >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
         env:
           GITHUB_ACTIONS: true
           TZ: Asia/Shanghai
           DXY_COOKIE: ${{ secrets.DXY_COOKIE }}
           SCKEY: ${{ secrets.SCKEY }}
-
-      - name: 显示最终运行日志
-        if: always()
         run: |
-          echo "========== 最终日志 =========="
-          cat output.log || true
+          echo "========== 开始运行 dxy_read.py =========="
+          python dxy_read.py
+          echo "========== 脚本运行结束 =========="
