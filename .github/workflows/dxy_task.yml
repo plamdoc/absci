@@ -1,12 +1,13 @@
-name: DXY Auto Read
-
+name: dinxiangyuan1renwuguanli
 on:
   workflow_dispatch:
   schedule:
-    # 北京时间每40分钟运行一次（原Cron完全正确，无需修改）
-    # 对应UTC时间：偶数小时0/40分，奇数小时20分 → 转换为北京时间正好全天均匀间隔
-    - cron: '0,40 */2 * * *'
-    - cron: '20 1-23/2 * * *'
+    # ✅ 北京时间：每天8:13 → 次日0:13，每隔1小时运行一次
+    # 转换逻辑：北京时间 = UTC时间 + 8小时
+    # UTC 0:13 → 北京8:13（开始）
+    # UTC 16:13 → 北京0:13（最后一次，在0:30截止前）
+    # 共运行17次：8:13,9:13,10:13,...,23:13,0:13
+    - cron: '13 0-16 * * *'
 
 jobs:
   run-dxy:
@@ -23,7 +24,6 @@ jobs:
           python-version: '3.10'
           cache: 'pip'
 
-      # 新增：缓存Playwright浏览器内核，大幅提速
       - name: Cache Playwright Browsers
         uses: actions/cache@v4
         id: cache-playwright
@@ -41,19 +41,16 @@ jobs:
           else
             pip install requests playwright
           fi
-          # 仅当缓存未命中时才安装浏览器
           if [ "${{ steps.cache-playwright.outputs.cache-hit }}" != 'true' ]; then
             python -m playwright install --with-deps chromium
           fi
 
       - name: Run DXY Script
         id: read_task
-        continue-on-error: true  # 关键：脚本失败时继续执行后续步骤
+        continue-on-error: true
         run: |
           echo "========== 开始执行丁香园阅读任务 =========="
-          # 确保日志文件存在，即使脚本执行失败
           touch output.log
-          # 执行脚本并实时输出日志（同时保存到文件）
           python -u dxy_read.py 2>&1 | tee output.log
         env:
           GITHUB_ACTIONS: true
@@ -62,30 +59,24 @@ jobs:
           SCKEY: ${{ secrets.SCKEY }}
 
       - name: Display Full Log
-        if: always()  # 关键：无论前面步骤是否失败，都显示日志
+        if: always()
         run: |
           echo "========== 完整执行日志 =========="
           cat output.log
 
-      # 新增：Server酱推送执行结果（可选但强烈推荐）
       - name: Send Notification via ServerChan
         if: always()
         run: |
-          # 判断任务是否成功
           if [ "${{ steps.read_task.outcome }}" = "success" ]; then
             STATUS="✅ 任务成功"
           else
             STATUS="❌ 任务失败"
           fi
           
-          # 读取日志前1000行（避免推送内容过长）
           LOG=$(tail -n 1000 output.log | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
-          
-          # 构造推送内容
           TITLE="丁香园自动阅读 - $STATUS"
           CONTENT="### 执行结果\n$STATUS\n\n### 日志摘要\n\`\`\`\n$LOG\n\`\`\`"
           
-          # 发送推送（仅当配置了SCKEY时）
           if [ -n "$SCKEY" ]; then
             curl -s "https://sctapi.ftqq.com/$SCKEY.send" \
               -d "title=$TITLE" \
