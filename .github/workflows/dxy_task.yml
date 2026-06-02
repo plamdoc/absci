@@ -1,4 +1,4 @@
-name: dinxiangyuan1renwuguanli
+name: Dinxiangyuan1renwuguanli
 on:
   workflow_dispatch:
   schedule:
