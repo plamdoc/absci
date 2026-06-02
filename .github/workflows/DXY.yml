@@ -1,19 +1,12 @@
-name: DXY
+name: DXY Auto Read
 
 on:
   workflow_dispatch:
   schedule:
-    # ✅ UTC 0:13-16:13
-    # ✅ 对应北京时间：8:13、9:13、10:13、……、23:13、次日0:13
-    # ✅ 共运行17次
-    - cron: '13 0-16 * * *'
-
-permissions:
-  contents: read
-
-concurrency:
-  group: dxy-read-task
-  cancel-in-progress: true
+    # ✅ 北京时间每30分钟运行一次（完美覆盖全天整点+半点）
+    # 原理：UTC时间的0分/30分 → 加8小时后北京时间分钟仍为0分/30分
+    # 对应时间点：UTC 16:00→北京00:00, UTC16:30→北京00:30 ... UTC15:30→北京23:30
+    - cron: '*/30 * * * *'
 
 jobs:
   run-dxy:
@@ -23,17 +16,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Initialize log file
-        run: |
-          touch output.log
-          echo "========== 工作流启动 ==========" | tee -a output.log
-          echo "触发方式: ${{ github.event_name }}" | tee -a output.log
-          echo "触发 cron: ${{ github.event.schedule }}" | tee -a output.log
-          echo "当前 UTC 时间:" | tee -a output.log
-          date -u | tee -a output.log
-          echo "当前北京时间:" | tee -a output.log
-          TZ='Asia/Shanghai' date | tee -a output.log
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -52,62 +34,23 @@ jobs:
 
       - name: Install dependencies
         run: |
-          set -euo pipefail
-
-          echo "========== 安装 Python 依赖 ==========" | tee -a output.log
-
-          python -m pip install --upgrade pip 2>&1 | tee -a output.log
-
+          python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then
-            echo "检测到 requirements.txt，开始安装依赖" | tee -a output.log
-            pip install -r requirements.txt 2>&1 | tee -a output.log
+            pip install -r requirements.txt
           else
-            echo "未检测到 requirements.txt，默认安装 requests 和 playwright" | tee -a output.log
-            pip install requests playwright 2>&1 | tee -a output.log
+            pip install requests playwright
           fi
-
-          echo "========== 安装 Playwright Chromium 及系统依赖 ==========" | tee -a output.log
-          python -m playwright install --with-deps chromium 2>&1 | tee -a output.log
-
-      - name: Check secrets
-        run: |
-          echo "========== 检查 Secrets 配置 ==========" | tee -a output.log
-
-          if [ -z "${DXY_COOKIE}" ]; then
-            echo "❌ DXY_COOKIE 未配置，请到 GitHub 仓库 Settings -> Secrets and variables -> Actions 中添加 DXY_COOKIE" | tee -a output.log
-            exit 1
-          else
-            echo "✅ DXY_COOKIE 已配置" | tee -a output.log
+          if [ "${{ steps.cache-playwright.outputs.cache-hit }}" != 'true' ]; then
+            python -m playwright install --with-deps chromium
           fi
-
-          if [ -z "${SCKEY}" ]; then
-            echo "⚠️ SCKEY 未配置，任务仍会运行，但不会发送 Server酱通知" | tee -a output.log
-          else
-            echo "✅ SCKEY 已配置" | tee -a output.log
-          fi
-        env:
-          DXY_COOKIE: ${{ secrets.DXY_COOKIE }}
-          SCKEY: ${{ secrets.SCKEY }}
 
       - name: Run DXY Script
         id: read_task
         continue-on-error: true
         run: |
-          set -o pipefail
-
-          echo "========== 开始执行丁香园阅读任务 ==========" | tee -a output.log
-          echo "Python 版本：" | tee -a output.log
-          python --version 2>&1 | tee -a output.log
-
-          echo "当前目录文件：" | tee -a output.log
-          ls -la 2>&1 | tee -a output.log
-
-          if [ ! -f dxy_read.py ]; then
-            echo "❌ 未找到 dxy_read.py，请确认脚本文件名是否正确" | tee -a output.log
-            exit 1
-          fi
-
-          python -u dxy_read.py 2>&1 | tee -a output.log
+          echo "========== 开始执行丁香园阅读任务 =========="
+          touch output.log
+          python -u dxy_read.py 2>&1 | tee output.log
         env:
           GITHUB_ACTIONS: true
           TZ: Asia/Shanghai
@@ -115,64 +58,31 @@ jobs:
           SCKEY: ${{ secrets.SCKEY }}
 
       - name: Display Full Log
-        if: ${{ !cancelled() }}
+        if: always()
         run: |
           echo "========== 完整执行日志 =========="
-          if [ -f output.log ]; then
-            cat output.log
-          else
-            echo "未找到 output.log"
-          fi
+          cat output.log
 
       - name: Send Notification via ServerChan
-        if: ${{ !cancelled() }}
+        if: always()
         run: |
           if [ "${{ steps.read_task.outcome }}" = "success" ]; then
             STATUS="✅ 任务成功"
           else
             STATUS="❌ 任务失败"
           fi
-
-          if [ -f output.log ]; then
-            LOG=$(tail -n 1000 output.log)
-          else
-            LOG="未找到 output.log，可能前置步骤失败。"
-          fi
-
+          
+          LOG=$(tail -n 1000 output.log | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')
           TITLE="丁香园自动阅读 - $STATUS"
-
-          CONTENT=$(cat <<EOF
-### 执行结果
-$STATUS
-
-### 触发信息
-- 触发方式：${{ github.event_name }}
-- 触发 cron：${{ github.event.schedule }}
-
-### 时间信息
-- UTC 时间：$(date -u)
-- 北京时间：$(TZ='Asia/Shanghai' date)
-
-### 日志摘要
-\`\`\`
-$LOG
-\`\`\`
-EOF
-)
-
+          CONTENT="### 执行结果\n$STATUS\n\n### 日志摘要\n\`\`\`\n$LOG\n\`\`\`"
+          
           if [ -n "$SCKEY" ]; then
             curl -s "https://sctapi.ftqq.com/$SCKEY.send" \
-              --data-urlencode "title=$TITLE" \
-              --data-urlencode "desp=$CONTENT"
+              -d "title=$TITLE" \
+              -d "desp=$CONTENT"
             echo "通知已发送"
           else
-            echo "未配置 SCKEY，跳过通知"
+            echo "未配置SCKEY，跳过通知"
           fi
         env:
           SCKEY: ${{ secrets.SCKEY }}
-
-      - name: Mark workflow failed if script failed
-        if: ${{ steps.read_task.outcome != 'success' }}
-        run: |
-          echo "DXY 脚本执行失败，标记本次 workflow 为失败。"
-          exit 1
