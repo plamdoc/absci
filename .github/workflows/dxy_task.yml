@@ -3,9 +3,9 @@ name: DXY Auto Read
 on:
   workflow_dispatch:
   schedule:
-    # 每小时的第 15 分钟运行，完美避开整点拥堵 (例如: 08:15, 09:15)
-    - cron: '15 * * * *'
-
+    # 北京时间每40分钟运行一次（均匀间隔：00:00, 00:40, 01:20, 02:00, 02:40...）
+    - cron: '0,40 */2 * * *'   # 偶数小时（UTC）的0分和40分
+    - cron: '20 1-23/2 * * *'  # 奇数小时（UTC）的20分
 jobs:
   run-dxy:
     runs-on: ubuntu-latest
