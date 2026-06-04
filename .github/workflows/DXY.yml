@@ -2,13 +2,7 @@ name: DXY Auto Read
 
 on:
   workflow_dispatch:
-  schedule:
-    # 北京时间每40分钟运行一次，避开整点和常见高峰分钟：
-    # 00:07, 00:47, 01:27, 02:07, 02:47, 03:27 ...
-    - cron: '7,47 */2 * * *'
-      timezone: "Asia/Shanghai"
-    - cron: '27 1-23/2 * * *'
-      timezone: "Asia/Shanghai"
+ 
 
 concurrency:
   group: dxy-auto-read
