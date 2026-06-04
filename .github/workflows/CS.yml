@@ -2,11 +2,7 @@ name: DXY CS
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '7,47 */2 * * *'
-      timezone: "Asia/Shanghai"
-    - cron: '27 1-23/2 * * *'
-      timezone: "Asia/Shanghai"
+  
 
 concurrency:
   group: dxy-auto-read
