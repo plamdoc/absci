@@ -3,54 +3,140 @@ name: DXY Auto Read
 on:
   workflow_dispatch:
   schedule:
-    # 北京时间每40分钟运行一次（均匀间隔：00:00, 00:40, 01:20, 02:00, 02:40...）
-    - cron: '0,40 */2 * * *'   # 偶数小时（UTC）的0分和40分
-    - cron: '20 1-23/2 * * *'  # 奇数小时（UTC）的20分
+    # 北京时间每40分钟运行一次，避开整点和常见高峰分钟：
+    # 00:07, 00:47, 01:27, 02:07, 02:47, 03:27 ...
+    - cron: '7,47 */2 * * *'
+      timezone: "Asia/Shanghai"
+    - cron: '27 1-23/2 * * *'
+      timezone: "Asia/Shanghai"
+
+concurrency:
+  group: dxy-auto-read
+  cancel-in-progress: true
+
 jobs:
   run-dxy:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
+
+    # 使用 Playwright Python 官方镜像
+    # 镜像内已包含 Chromium 浏览器和系统依赖，避免每次 install --with-deps
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.59.0-noble
+      options: --ipc=host
+
+    env:
+      GITHUB_ACTIONS: true
+      TZ: Asia/Shanghai
+      DXY_COOKIE: ${{ secrets.DXY_COOKIE }}
+      SCKEY: ${{ secrets.SCKEY }}
+      PLAYWRIGHT_VERSION: "1.59.0"
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: 'pip'  # 开启 pip 缓存，加速后续运行
-
-      - name: Install dependencies
+      - name: Show trigger info
         run: |
+          echo "========== 触发信息 =========="
+          echo "触发方式: ${{ github.event_name }}"
+          echo "触发分支: ${{ github.ref }}"
+          echo "触发定时: ${{ github.event.schedule }}"
+          echo "当前 UTC 时间:"
+          date -u
+          echo "当前北京时间:"
+          TZ='Asia/Shanghai' date
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-dxy-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-dxy-
+
+      - name: Install Python dependencies
+        run: |
+          echo "========== 安装 Python 依赖 =========="
           python -m pip install --upgrade pip
-          # 优先读取 requirements.txt，如果没有则手动安装 requests 和 playwright
+
           if [ -f requirements.txt ]; then
+            echo "检测到 requirements.txt，开始安装..."
             pip install -r requirements.txt
           else
-            pip install requests playwright
+            echo "未检测到 requirements.txt，安装默认依赖..."
+            pip install requests
           fi
-          # 安装 Playwright 浏览器内核及系统依赖
-          python -m playwright install --with-deps chromium
+
+          echo "========== 安装与镜像版本匹配的 Playwright Python 包 =========="
+          pip install --upgrade "playwright==${PLAYWRIGHT_VERSION}"
+
+          echo "========== 检查 Playwright 是否可用 =========="
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+
+          print("✅ Playwright Python 导入成功")
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch(
+                  headless=True,
+                  args=[
+                      "--no-sandbox",
+                      "--disable-dev-shm-usage"
+                  ]
+              )
+              page = browser.new_page()
+              page.goto("about:blank")
+              print("✅ Chromium 启动成功")
+              browser.close()
+          PY
+
+      - name: Check secrets
+        run: |
+          echo "========== 检查 Secrets =========="
+
+          if [ -z "$DXY_COOKIE" ]; then
+            echo "❌ DXY_COOKIE 未配置，请到仓库 Settings > Secrets and variables > Actions 添加"
+            exit 1
+          else
+            echo "✅ DXY_COOKIE 已配置"
+          fi
+
+          if [ -z "$SCKEY" ]; then
+            echo "⚠️ SCKEY 未配置，如果脚本依赖 Server酱推送，可能无法推送"
+          else
+            echo "✅ SCKEY 已配置"
+          fi
 
       - name: Run DXY Script
         id: read_task
+        shell: bash
         run: |
           echo "========== 开始执行丁香园阅读任务 =========="
-          # 执行脚本并将输出重定向到 output.log
-          python dxy_read.py > output.log 2>&1
-          
-          # 使用 EOF 语法将多行日志打包注入到环境变量中，方便推送
-          echo "LOG_CONTENT<<EOF" >> $GITHUB_ENV
-          cat output.log >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-        env:
-          GITHUB_ACTIONS: true
-          TZ: Asia/Shanghai  # 强制统一为北京时间
-          DXY_COOKIE: ${{ secrets.DXY_COOKIE }}
-          SCKEY: ${{ secrets.SCKEY }}
+
+          set +e
+          python -u dxy_read.py 2>&1 | tee output.log
+          EXIT_CODE=${PIPESTATUS[0]}
+          set -e
+
+          echo "========== 脚本退出码：$EXIT_CODE =========="
+
+          {
+            echo "## DXY Auto Read 日志"
+            echo ""
+            echo '```text'
+            tail -n 200 output.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit $EXIT_CODE
 
       - name: Display Log
+        if: always()
         run: |
-          echo "========== 提取的多行日志内容 =========="
-          echo "${{ env.LOG_CONTENT }}"   
+          echo "========== 输出最近 200 行日志 =========="
+          if [ -f output.log ]; then
+            tail -n 200 output.log
+          else
+            echo "未找到 output.log"
+          fi
