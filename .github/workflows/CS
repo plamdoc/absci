@@ -1,0 +1,125 @@
+name: DXY CS
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '7,47 */2 * * *'
+      timezone: "Asia/Shanghai"
+    - cron: '27 1-23/2 * * *'
+      timezone: "Asia/Shanghai"
+
+concurrency:
+  group: dxy-auto-read
+  cancel-in-progress: true
+
+jobs:
+  run-dxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.59.0-noble
+      options: --ipc=host
+
+    env:
+      GITHUB_ACTIONS: true
+      TZ: Asia/Shanghai
+      DXY_COOKIE: ${{ secrets.DXY_COOKIE }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-dxy-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-dxy-
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install requests playwright==1.59.0
+          fi
+
+      - name: Check secrets
+        run: |
+          if [ -z "$DXY_COOKIE" ]; then
+            echo "❌ DXY_COOKIE 未配置"
+            exit 1
+          fi
+
+      - name: Run DXY Script
+        id: read_task
+        shell: bash
+        run: |
+          set +e
+          python -u DDD.py 2>&1 | tee output.log
+          EXIT_CODE=${PIPESTATUS[0]}
+          set -e
+          
+          # 将最终日志写入 GitHub Summary 方便在网页查看
+          {
+            echo "## DXY Auto Read 日志"
+            echo '```text'
+            tail -n 100 output.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit $EXIT_CODE
+
+      - name: Prepare Email Content
+        # 仅当 Python 脚本确认有新成功记录时，才执行邮件准备
+        if: env.HAS_NEW_SUCCESS == 'true'
+        run: |
+          if [ -f output.log ]; then
+            # 提取最后15行核心日志，防止过长，并处理换行符
+            LOG_CONTENT=$(tail -n 15 output.log | sed 's/$/<br\/>/' | sed "s/'/’/g")
+          else
+            LOG_CONTENT="未找到运行日志。"
+          fi
+          
+          STATUS_BADGE="<span style='background-color: #e6f4ea; color: #1e8e3e; padding: 4px 10px; border-radius: 6px; font-weight: 500; font-size: 13px;'>执行成功</span>"
+          SUBJECT_STATUS="[Success]"
+          
+          # 构建干净、专业的邮件卡片 HTML 模板
+          cat <<EOF > email_body.html
+          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 550px; margin: 20px auto; border: 1px solid #eef2f5; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.03); background-color: #ffffff;">
+            <div style="background-color: #f8fafc; padding: 20px 24px; border-bottom: 1px solid #eef2f5;">
+              <h3 style="margin: 0; color: #334155; font-size: 18px; font-weight: 600;">智享助手 · 运行报告</h3>
+            </div>
+            <div style="padding: 24px;">
+              <div style="margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between;">
+                <span style="font-size: 14px; color: #64748b;">任务名称：<strong style="color: #0f172a;">DXY Auto Read</strong></span>
+                $STATUS_BADGE
+              </div>
+              <div style="background-color: #f1f5f9; border-left: 3px solid #94a3b8; padding: 16px; border-radius: 4px 6px 6px 4px; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 13px; color: #475569; line-height: 1.6; word-break: break-all;">
+                $LOG_CONTENT
+              </div>
+            </div>
+            <div style="background-color: #f8fafc; padding: 14px 24px; text-align: center; border-top: 1px solid #eef2f5; font-size: 12px; color: #94a3b8;">
+              北京时间 $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M') 自动投递
+            </div>
+          </div>
+          EOF
+          
+          echo "SUBJECT_STATUS=$SUBJECT_STATUS" >> $GITHUB_ENV
+
+      - name: Send Email Notification
+        uses: dawidd6/action-send-mail@v3
+        # 同样，仅当有新成功记录时，才真实发送邮件
+        if: env.HAS_NEW_SUCCESS == 'true'
+        with:
+          server_address: smtp.qq.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: "${{ env.SUBJECT_STATUS }} 丁香园任务报告"
+          to: ${{ secrets.TO_EMAIL }}
+          from: 智享助手
+          html_body: file://email_body.html
