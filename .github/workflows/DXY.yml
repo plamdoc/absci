@@ -19,8 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
 
-    # 使用 Playwright Python 官方镜像
-    # 镜像内已包含 Chromium 浏览器和系统依赖，避免每次 install --with-deps
+    # 使用 Playwright 官方 Python 镜像
+    # 镜像内已经包含 Chromium 和系统依赖
     container:
       image: mcr.microsoft.com/playwright/python:v1.59.0-noble
       options: --ipc=host
@@ -30,7 +30,6 @@ jobs:
       TZ: Asia/Shanghai
       DXY_COOKIE: ${{ secrets.DXY_COOKIE }}
       SCKEY: ${{ secrets.SCKEY }}
-      PLAYWRIGHT_VERSION: "1.59.0"
 
     steps:
       - name: Checkout code
@@ -65,11 +64,8 @@ jobs:
             pip install -r requirements.txt
           else
             echo "未检测到 requirements.txt，安装默认依赖..."
-            pip install requests
+            pip install requests beautifulsoup4 playwright==1.59.0
           fi
-
-          echo "========== 安装与镜像版本匹配的 Playwright Python 包 =========="
-          pip install --upgrade "playwright==${PLAYWRIGHT_VERSION}"
 
           echo "========== 检查 Playwright 是否可用 =========="
           python - <<'PY'
