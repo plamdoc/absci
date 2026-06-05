@@ -57,9 +57,10 @@ def run_account(cookie_str, account_idx):
                 headless=True,
                 args=['--disable-blink-features=AutomationControlled'] 
             )
+            # 使用手机设备的 Viewport 会更有利于触发移动端专属的 15 秒倒计时浮窗
             context = browser.new_context(
                 user_agent=req_headers['User-Agent'],
-                viewport={'width': 1280, 'height': 800}
+                viewport={'width': 390, 'height': 844} # 模拟常见手机屏幕比例
             )
             context.add_cookies(parse_cookie_string(cookie_str))
             
@@ -76,21 +77,33 @@ def run_account(cookie_str, account_idx):
                 task_title = task.get('title')
                 print(f"[{i+1}/{len(todo_tasks)}] 📖 正在模拟阅读: {task_title}", flush=True)
                 
-                # 容错处理：无视外链重定向打断错误
+                # 访问中转链接
                 try:
                     page.goto(f"https://hao.dxy.cn/plus/activity/linkTask/{task_id}", timeout=15000)
                 except Exception:
                     pass 
                 
-                page.wait_for_timeout(4000)
+                # 给网页足够的加载时间，确保 JS 倒计时脚本成功启动
+                page.wait_for_timeout(5000)
                 
-                # 分段滑动模拟真人阅读，强行停留 12 秒触发埋点
-                for _ in range(4):
+                try:
+                    print(f"   -> 落地页面标题: {page.title()}", flush=True)
+                except Exception:
+                    pass
+                
+                # 💡 核心修改：应对 15 秒倒计时！
+                # 循环 6 次，每次滑动并等待 4 秒。总停留时长 24 秒。
+                # 确保持续有滑动动作，防止倒计时因无交互而暂停。
+                for step in range(6):
                     try:
-                        page.evaluate("window.scrollBy(0, 500)")
+                        # 前5次向下滑动，最后1次稍微往回滑一点，更像真人
+                        if step < 5:
+                            page.evaluate("window.scrollBy(0, 400)")
+                        else:
+                            page.evaluate("window.scrollBy(0, -200)")
                     except Exception:
                         pass
-                    page.wait_for_timeout(3000)
+                    page.wait_for_timeout(4000)
                 
                 # 重新验证
                 try:
@@ -98,10 +111,10 @@ def run_account(cookie_str, account_idx):
                     new_status = next((t.get('userStatus') for t in verify_res.get('results', {}).get('items', []) if t.get('id') == task_id), 0)
                     
                     if new_status == 2:
-                        print("   -> 🎉 校验成功！积分已到账。", flush=True)
+                        print("   -> 🎉 校验成功！15秒阅读完成，积分已到账。", flush=True)
                         success_count += 1
                     else:
-                        print("   -> ❌ 校验失败：时长不足或触发平台风控。", flush=True)
+                        print("   -> ❌ 校验失败：可能倒计时未走完或触发防刷机制。", flush=True)
                 except Exception as e:
                     print(f"   -> ⚠️ 校验状态异常: {e}", flush=True)
                         
@@ -126,7 +139,7 @@ if __name__ == "__main__":
         
         all_summary = ""
         total_accounts = len(cookies)
-        global_success_count = 0  # 💡 核心修改：记录所有账号本轮点击的总成功数
+        global_success_count = 0 
         
         for idx, c in enumerate(cookies, 1):
             success_count, account_summary = run_account(c, idx)
@@ -139,7 +152,6 @@ if __name__ == "__main__":
                 
         print("\n✅ 所有账号运行流程结束。", flush=True)
         
-        # 💡 核心修改：只有当本轮有至少 1 个任务被成功点击时，才发送微信推送
         if global_success_count > 0:
             push_title = f"丁香园自动阅读通知 (本轮成功:{global_success_count}个)"
             send_serverchan(sckey, push_title, all_summary)
