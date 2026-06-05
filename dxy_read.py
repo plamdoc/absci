@@ -39,7 +39,7 @@ def run_account(cookie_str, account_idx):
     summary = f"**账号 {account_idx}**:\n\n"
     
     try:
-        # 1. 获取任务列表
+        # 获取任务列表
         res = requests.get(LIST_URL, headers=req_headers).json()
         items = res.get('results', {}).get('items', [])
         todo_tasks = [t for t in items if t.get('userStatus') != 2]
@@ -51,16 +51,16 @@ def run_account(cookie_str, account_idx):
 
         success_count = 0
         
-        # 2. 启动真实无头浏览器
+        # 启动真实无头浏览器
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
                 args=['--disable-blink-features=AutomationControlled'] 
             )
-            # 使用手机设备的 Viewport 会更有利于触发移动端专属的 15 秒倒计时浮窗
+            # 模拟手机端，更容易触发底部的倒计时悬浮窗
             context = browser.new_context(
-                user_agent=req_headers['User-Agent'],
-                viewport={'width': 390, 'height': 844} # 模拟常见手机屏幕比例
+                user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                viewport={'width': 390, 'height': 844} 
             )
             context.add_cookies(parse_cookie_string(cookie_str))
             
@@ -75,37 +75,49 @@ def run_account(cookie_str, account_idx):
                     
                 task_id = task.get('id')
                 task_title = task.get('title')
+                content_url = task.get('contentUrl', '')
                 print(f"[{i+1}/{len(todo_tasks)}] 📖 正在模拟阅读: {task_title}", flush=True)
                 
-                # 访问中转链接
+                # 第一步：先触发 linkTask 记录点击行为
                 try:
-                    page.goto(f"https://hao.dxy.cn/plus/activity/linkTask/{task_id}", timeout=15000)
+                    page.goto(f"https://hao.dxy.cn/plus/activity/linkTask/{task_id}", timeout=10000)
+                    page.wait_for_timeout(2000)
                 except Exception:
                     pass 
                 
-                # 给网页足够的加载时间，确保 JS 倒计时脚本成功启动
-                page.wait_for_timeout(5000)
+                # 第二步：如果有明确的文章地址，强制转入，避免重定向卡顿
+                if content_url and "dxy.cn" in content_url:
+                    try:
+                        page.goto(content_url, timeout=15000)
+                    except Exception:
+                        pass
+                
+                # 第三步：等待页面加载完毕，确保 15秒倒计时的 JS 已经加载
+                try:
+                    # 等待网络空闲（没有新的资源在下载）
+                    page.wait_for_load_state("networkidle", timeout=6000)
+                except Exception:
+                    pass
                 
                 try:
                     print(f"   -> 落地页面标题: {page.title()}", flush=True)
                 except Exception:
                     pass
                 
-                # 💡 核心修改：应对 15 秒倒计时！
-                # 循环 6 次，每次滑动并等待 4 秒。总停留时长 24 秒。
-                # 确保持续有滑动动作，防止倒计时因无交互而暂停。
-                for step in range(6):
+                # 💡 第四步：核心破解！物理级鼠标滚轮模拟 + 长时间挂机
+                # 循环 8 次，每次 3.5 秒，总计 28 秒（稳稳盖过 15 秒倒计时）
+                for step in range(8):
                     try:
-                        # 前5次向下滑动，最后1次稍微往回滑一点，更像真人
-                        if step < 5:
-                            page.evaluate("window.scrollBy(0, 400)")
+                        # 放弃 JS 注入，改用物理鼠标滚轮事件，防刷系统无法区分
+                        if step < 6:
+                            page.mouse.wheel(0, 500)  # 向下滚
                         else:
-                            page.evaluate("window.scrollBy(0, -200)")
+                            page.mouse.wheel(0, -300) # 回滚一下，模拟看完
                     except Exception:
                         pass
-                    page.wait_for_timeout(4000)
+                    page.wait_for_timeout(3500)
                 
-                # 重新验证
+                # 重新验证结果
                 try:
                     verify_res = requests.get(LIST_URL, headers=req_headers).json()
                     new_status = next((t.get('userStatus') for t in verify_res.get('results', {}).get('items', []) if t.get('id') == task_id), 0)
@@ -114,7 +126,7 @@ def run_account(cookie_str, account_idx):
                         print("   -> 🎉 校验成功！15秒阅读完成，积分已到账。", flush=True)
                         success_count += 1
                     else:
-                        print("   -> ❌ 校验失败：可能倒计时未走完或触发防刷机制。", flush=True)
+                        print("   -> ❌ 校验失败：可能倒计时被暂停或触发强风控。", flush=True)
                 except Exception as e:
                     print(f"   -> ⚠️ 校验状态异常: {e}", flush=True)
                         
