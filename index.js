@@ -1,10 +1,9 @@
 const puppeteer = require('puppeteer');
 
-// 强制等待函数
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 (async () => {
-    console.log("🚀 开始初始化jdtst (彻底修复版)...");
+    console.log("🚀 开始初始化京东自动化任务 (逻辑重构版)...");
 
     const rawCookie = process.env.JD_COOKIE;
     if (!rawCookie) {
@@ -29,7 +28,7 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     });
 
     const page = await browser.newPage();
-    page.setDefaultNavigationTimeout(60000); // 设置导航超时为60秒
+    page.setDefaultNavigationTimeout(60000); 
     
     await page.setViewport({ width: 390, height: 844, isMobile: true });
     await page.setCookie(...cookies);
@@ -39,27 +38,32 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     try {
         await page.goto('https://interact.jd.com/', { waitUntil: 'networkidle2' });
     } catch (e) {
-        console.log("⚠️ 页面加载完成，但部分资源超时，继续执行...");
+        console.log("⚠️ 页面加载完成，部分资源网络请求超时，继续执行...");
     }
 
-    console.log("🤖 开始按顺序执行任务...");
+    // 关键修复：强行等待核心宝箱模块渲染出来，防止页面还没加载完脚本就开始乱点
+    await page.waitForSelector('.lottery-box', { timeout: 15000 }).catch(() => {});
+    await sleep(3000); // 额外给页面动态渲染一点时间
+    
+    console.log("🤖 页面DOM已就绪，开始按顺序执行智能判定...");
 
-    // ================= 辅助函数：在页面内寻找并点击文字 =================
+    // ================= 辅助函数：点击匹配的文字按钮 =================
     async function clickBtnByText(page, textList) {
         return await page.evaluate((texts) => {
             const elements = document.querySelectorAll('div, span, button');
             for (let el of elements) {
                 const text = el.textContent.trim();
+                // 确保是底层节点，且包含目标文字
                 if (el.children.length === 0 && texts.includes(text)) {
                     el.click();
-                    return text; // 返回被点击的文字
+                    return text; 
                 }
             }
             return null;
         }, textList);
     }
 
-    // ================= 第一步：尝试签到 =================
+    // ================= 1. 执行初始签到 =================
     const signed = await page.evaluate(() => {
         const imgs = document.querySelectorAll('img');
         for (let img of imgs) {
@@ -75,69 +79,70 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
         await sleep(3000);
     }
 
-    // ================= 第二步：智能状态机循环 =================
+    // ================= 2. 状态机大循环 =================
     let hasClickedEarnMore = false;
-    let safeCounter = 0; // 安全锁，防止死循环
+    let safeCounter = 0; 
 
     while (true) {
         safeCounter++;
-        if (safeCounter > 80) {
-            console.log("🛑 达到最大循环次数(80次)，强制安全退出。");
+        if (safeCounter > 100) {
+            console.log("🛑 触发防死循环锁 (100次)，强制退出保存资源。");
             break;
         }
 
-        // 0. 检测是否彻底结束
-        const isFinished = await page.evaluate(() => {
-            if (document.body.innerText.includes('抽奖次数已用完，请明天再来')) return true;
-            const countDiv = document.querySelector('.lottery-count');
-            if (countDiv && countDiv.textContent.replace(/\s+/g, '') === '剩余0次') return true;
-            return false;
-        });
-
-        if (isFinished) {
-            console.log("🎉 任务已全部完成 (检测到抽奖次数为 0)！");
-            break;
-        }
-
-        // 1. 处理弹窗
-        const popupText = await clickBtnByText(page, ['开心收下', '收下', '我知道了']);
+        // 优先级 1：不管干嘛，只要有弹窗先收下
+        const popupText = await clickBtnByText(page, ['开心收下', '收下', '我知道了', '继续抽', '去使用']);
         if (popupText) {
-            console.log(`🎁 发现弹窗，已点击【${popupText}】，等待 2 秒...`);
+            console.log(`🎁 收下奖励，已点击【${popupText}】...`);
             await sleep(2000);
-            continue;
+            continue; 
         }
 
-        // 2. 展开任务列表
+        // 优先级 2：点开赚京豆面板
         if (!hasClickedEarnMore) {
             const earnMore = await clickBtnByText(page, ['赚更多京豆']);
             if (earnMore) {
-                console.log("💰 已点击【赚更多京豆】，展开任务列表，等待 2 秒...");
+                console.log("💰 已展开任务列表...");
                 hasClickedEarnMore = true;
                 await sleep(2000);
                 continue;
             }
         }
 
-        // 3. 执行核心任务 (浏览/关注等)
+        // 优先级 3：扫描并执行任务
         const taskText = await clickBtnByText(page, ['去完成', '去浏览', '领取', '去领取', '去关注', '逛一逛']);
         if (taskText) {
-            console.log(`⏳ 发现任务【${taskText}】，已点击。强制等待 8 秒完成任务...`);
-            await sleep(8000); // 必须等待8秒，满足“浏览6S”的要求
+            console.log(`⏳ 正在执行任务【${taskText}】，强制等待 8 秒...`);
+            await sleep(8000); // 必须等8秒
 
-            // 核心修复点：关闭京东打开的所有多余标签页
+            // 清理多余标签页
             const pages = await browser.pages();
             if (pages.length > 1) {
-                console.log(`🧹 清理垃圾标签页：发现 ${pages.length} 个标签页，正在关闭多余页面...`);
                 for (let i = 1; i < pages.length; i++) {
                     await pages[i].close();
                 }
-                await pages[0].bringToFront(); // 焦点回到主页面
-                await sleep(2000); // 缓冲一下
+                await pages[0].bringToFront(); 
+                await sleep(1500); 
             }
-            continue; // 继续下一轮循环
+            continue; // 做完一个任务，重头开始下一轮扫描
         }
 
-        // 4. 开始抽奖
+        // 优先级 4：走到这里，说明【没弹窗】+【没任务】。这时候去检查抽奖！
+        const drawStatus = await page.evaluate(() => {
+            const countDiv = document.querySelector('.lottery-count');
+            if (countDiv && countDiv.textContent.replace(/\s+/g, '') === '剩余0次') {
+                return 'empty'; 
+            }
+            return 'can_draw';
+        });
+
+        // 如果明确显示剩余0次了，说明羊毛已经彻底薅干了
+        if (drawStatus === 'empty') {
+            console.log("🎉 所有任务已清空，且抽奖次数为 0，今日任务彻底结束！");
+            break; // 真正跳出循环，结束脚本
+        }
+
+        // 如果不是 0 次，就尝试去点抽奖按钮
         const drawClicked = await page.evaluate(() => {
             const drawBtn = document.querySelector('.pointer');
             if (drawBtn) {
@@ -148,15 +153,15 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
         });
         
         if (drawClicked) {
-            console.log("🎰 已点击【立即开奖】，等待抽奖动画 5 秒...");
-            await sleep(5000); // 抽奖动画比较长，多等一会儿
-            continue;
+            console.log("🎰 已点击【立即开奖】，等待 6 秒开奖动画...");
+            await sleep(6000); 
+            continue; // 抽完奖，重头开始循环（回去处理开奖弹窗）
         }
 
-        // 如果上面都没执行（比如页面还在渲染），休息 2 秒再找
+        // 如果页面卡顿什么都没找到，休息 2 秒再找
         await sleep(2000);
     }
 
-    console.log("✅ 今日自动化任务圆满结束，准备关机...");
+    console.log("✅ 浏览器资源清理中，任务圆满收工。");
     await browser.close();
 })();
