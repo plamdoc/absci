@@ -4,7 +4,6 @@ import requests
 from playwright.sync_api import sync_playwright
 
 LIST_URL = "https://hao.dxy.cn/api/client/proxy/api/stats/client/session/task/activity/list?taskType=2&pageNo=1&pageSize=15&reset=true"
-MAX_CLICKS = 5
 
 def send_serverchan(sckey, title, desp):
     """Server酱推送模块"""
@@ -57,7 +56,7 @@ def run_account(cookie_str, account_idx):
                 headless=True,
                 args=['--disable-blink-features=AutomationControlled'] 
             )
-            # 模拟手机端，更容易触发底部的倒计时悬浮窗
+            # 模拟手机端
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
                 viewport={'width': 390, 'height': 844} 
@@ -68,24 +67,26 @@ def run_account(cookie_str, account_idx):
             page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
             for i, task in enumerate(todo_tasks):
-                if success_count >= MAX_CLICKS:
-                    print(f"🛑 达到每次运行最大限制 {MAX_CLICKS} 个，自动安全退出。剩下的留到下小时。", flush=True)
-                    summary += f"- 🛑 达到最大限制，下小时继续。\n"
-                    break
-                    
                 task_id = task.get('id')
                 task_title = task.get('title')
                 content_url = task.get('contentUrl', '')
                 print(f"[{i+1}/{len(todo_tasks)}] 📖 正在模拟阅读: {task_title}", flush=True)
                 
-                # 第一步：先触发 linkTask 记录点击行为
+                # 第一步：先触发 linkTask 记录点击行为，可能会跳转到二次确认页
                 try:
                     page.goto(f"https://hao.dxy.cn/plus/activity/linkTask/{task_id}", timeout=10000)
                     page.wait_for_timeout(2000)
+                    
+                    # ✨ 新增：检测并处理二次确认弹窗
+                    confirm_btn = page.locator('text="去阅读"')
+                    if confirm_btn.count() > 0:
+                        print("   -> 发现二次确认页面，执行点击...", flush=True)
+                        confirm_btn.last.click(timeout=3000)
+                        page.wait_for_timeout(2000)
                 except Exception:
                     pass 
                 
-                # 第二步：如果有明确的文章地址，强制转入，避免重定向卡顿
+                # 第二步：如果有明确的文章地址，强制转入，确保到达最终文章页
                 if content_url and "dxy.cn" in content_url:
                     try:
                         page.goto(content_url, timeout=15000)
@@ -94,7 +95,6 @@ def run_account(cookie_str, account_idx):
                 
                 # 第三步：等待页面加载完毕，确保 15秒倒计时的 JS 已经加载
                 try:
-                    # 等待网络空闲（没有新的资源在下载）
                     page.wait_for_load_state("networkidle", timeout=6000)
                 except Exception:
                     pass
@@ -104,11 +104,9 @@ def run_account(cookie_str, account_idx):
                 except Exception:
                     pass
                 
-                # 💡 第四步：核心破解！物理级鼠标滚轮模拟 + 长时间挂机
-                # 循环 8 次，每次 3.5 秒，总计 28 秒（稳稳盖过 15 秒倒计时）
+                # 第四步：核心破解！物理级鼠标滚轮模拟 + 长时间挂机 (共 28 秒)
                 for step in range(8):
                     try:
-                        # 放弃 JS 注入，改用物理鼠标滚轮事件，防刷系统无法区分
                         if step < 6:
                             page.mouse.wheel(0, 500)  # 向下滚
                         else:
@@ -125,13 +123,15 @@ def run_account(cookie_str, account_idx):
                     if new_status == 2:
                         print("   -> 🎉 校验成功！15秒阅读完成，积分已到账。", flush=True)
                         success_count += 1
+                        summary += f"- ✅ 成功阅读并认领奖励: **{task_title}**\n\n"
+                        print("   -> 🛑 目标已成功获取，立即终止当前活动以保护账号安全。", flush=True)
+                        break # ✨ 修改：一旦成功获取一次，立即退出循环
                     else:
                         print("   -> ❌ 校验失败：可能倒计时被暂停或触发强风控。", flush=True)
                 except Exception as e:
                     print(f"   -> ⚠️ 校验状态异常: {e}", flush=True)
                         
             browser.close()
-            summary += f"- ✅ 本轮成功点击: **{success_count}** 个。\n\n"
             return success_count, summary
             
     except Exception as e:
@@ -168,4 +168,4 @@ if __name__ == "__main__":
             push_title = f"丁香园自动阅读通知 (本轮成功:{global_success_count}个)"
             send_serverchan(sckey, push_title, all_summary)
         else:
-            print("ℹ️ 本轮没有新增阅读点击（或今日任务早已全部完成），跳过 Server酱推送以节省配额。", flush=True)
+            print("ℹ️ 本轮没有新增阅读点击，跳过 Server酱推送。", flush=True)
