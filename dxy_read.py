@@ -4,6 +4,7 @@ import requests
 from playwright.sync_api import sync_playwright
 
 LIST_URL = "https://hao.dxy.cn/api/client/proxy/api/stats/client/session/task/activity/list?taskType=2&pageNo=1&pageSize=15&reset=true"
+MAX_CLICKS = 5  # ✨ 恢复最大点击次数限制
 
 def send_serverchan(sckey, title, desp):
     """Server酱推送模块"""
@@ -67,6 +68,12 @@ def run_account(cookie_str, account_idx):
             page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
             for i, task in enumerate(todo_tasks):
+                # ✨ 新增：检查是否达到了单次运行的最大限制
+                if success_count >= MAX_CLICKS:
+                    print(f"🛑 达到每次运行最大限制 {MAX_CLICKS} 个，自动安全退出。剩下的留到下小时。", flush=True)
+                    summary += f"- 🛑 达到最大限制，下小时继续。\n"
+                    break
+                    
                 task_id = task.get('id')
                 task_title = task.get('title')
                 content_url = task.get('contentUrl', '')
@@ -77,7 +84,7 @@ def run_account(cookie_str, account_idx):
                     page.goto(f"https://hao.dxy.cn/plus/activity/linkTask/{task_id}", timeout=10000)
                     page.wait_for_timeout(2000)
                     
-                    # ✨ 新增：检测并处理二次确认弹窗
+                    # 检测并处理二次确认弹窗
                     confirm_btn = page.locator('text="去阅读"')
                     if confirm_btn.count() > 0:
                         print("   -> 发现二次确认页面，执行点击...", flush=True)
@@ -104,7 +111,7 @@ def run_account(cookie_str, account_idx):
                 except Exception:
                     pass
                 
-                # 第四步：核心破解！物理级鼠标滚轮模拟 + 长时间挂机 (共 28 秒)
+                # 第四步：物理级鼠标滚轮模拟 + 长时间挂机 (共 28 秒)
                 for step in range(8):
                     try:
                         if step < 6:
@@ -124,8 +131,7 @@ def run_account(cookie_str, account_idx):
                         print("   -> 🎉 校验成功！15秒阅读完成，积分已到账。", flush=True)
                         success_count += 1
                         summary += f"- ✅ 成功阅读并认领奖励: **{task_title}**\n\n"
-                        print("   -> 🛑 目标已成功获取，立即终止当前活动以保护账号安全。", flush=True)
-                        break # ✨ 修改：一旦成功获取一次，立即退出循环
+                        # ✨ 移除了一旦成功就强制 break 的错误逻辑，允许循环继续
                     else:
                         print("   -> ❌ 校验失败：可能倒计时被暂停或触发强风控。", flush=True)
                 except Exception as e:
