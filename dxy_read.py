@@ -4,7 +4,7 @@ import requests
 from playwright.sync_api import sync_playwright
 
 LIST_URL = "https://hao.dxy.cn/api/client/proxy/api/stats/client/session/task/activity/list?taskType=2&pageNo=1&pageSize=15&reset=true"
-MAX_CLICKS = 5  # ✨ 恢复最大点击次数限制
+MAX_CLICKS = 5  # 每次最多阅读 5 个
 
 def send_serverchan(sckey, title, desp):
     """Server酱推送模块"""
@@ -68,9 +68,9 @@ def run_account(cookie_str, account_idx):
             page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
             for i, task in enumerate(todo_tasks):
-                # ✨ 新增：检查是否达到了单次运行的最大限制
+                # 检查是否达到了单次运行的最大限制
                 if success_count >= MAX_CLICKS:
-                    print(f"🛑 达到每次运行最大限制 {MAX_CLICKS} 个，自动安全退出。剩下的留到下小时。", flush=True)
+                    print(f"🛑 达到每次运行最大限制 {MAX_CLICKS} 个，自动安全退出。", flush=True)
                     summary += f"- 🛑 达到最大限制，下小时继续。\n"
                     break
                     
@@ -79,30 +79,25 @@ def run_account(cookie_str, account_idx):
                 content_url = task.get('contentUrl', '')
                 print(f"[{i+1}/{len(todo_tasks)}] 📖 正在模拟阅读: {task_title}", flush=True)
                 
-                # 第一步：先触发 linkTask 记录点击行为，可能会跳转到二次确认页
+                # 第一步：快速触发 linkTask，并直接盲点二次确认按钮
                 try:
-                    page.goto(f"https://hao.dxy.cn/plus/activity/linkTask/{task_id}", timeout=10000)
-                    page.wait_for_timeout(2000)
-                    
-                    # 检测并处理二次确认弹窗
-                    confirm_btn = page.locator('text="去阅读"')
-                    if confirm_btn.count() > 0:
-                        print("   -> 发现二次确认页面，执行点击...", flush=True)
-                        confirm_btn.last.click(timeout=3000)
-                        page.wait_for_timeout(2000)
+                    # 使用 domcontentloaded 代替默认的 load，加快第一跳速度
+                    page.goto(f"https://hao.dxy.cn/plus/activity/linkTask/{task_id}", timeout=10000, wait_until="domcontentloaded")
+                    # 直接无脑点「去阅读」，不浪费时间判断，最多等 3 秒
+                    page.locator('text="去阅读"').last.click(timeout=3000)
                 except Exception:
                     pass 
                 
-                # 第二步：如果有明确的文章地址，强制转入，确保到达最终文章页
+                # 第二步：如果有明确的文章地址，强制转入
                 if content_url and "dxy.cn" in content_url:
                     try:
-                        page.goto(content_url, timeout=15000)
+                        page.goto(content_url, timeout=10000, wait_until="domcontentloaded")
                     except Exception:
                         pass
                 
-                # 第三步：等待页面加载完毕，确保 15秒倒计时的 JS 已经加载
+                # 第三步：等待基础 DOM 加载完毕，不再苦等 networkidle
                 try:
-                    page.wait_for_load_state("networkidle", timeout=6000)
+                    page.wait_for_load_state("domcontentloaded", timeout=3000)
                 except Exception:
                     pass
                 
@@ -111,16 +106,16 @@ def run_account(cookie_str, account_idx):
                 except Exception:
                     pass
                 
-                # 第四步：物理级鼠标滚轮模拟 + 长时间挂机 (共 28 秒)
-                for step in range(8):
+                # 第四步：物理级鼠标滚轮模拟 (压缩时长：共 6次 * 3秒 = 18秒，稳过15秒且更快)
+                for step in range(6):
                     try:
-                        if step < 6:
+                        if step < 4:
                             page.mouse.wheel(0, 500)  # 向下滚
                         else:
                             page.mouse.wheel(0, -300) # 回滚一下，模拟看完
                     except Exception:
                         pass
-                    page.wait_for_timeout(3500)
+                    page.wait_for_timeout(3000)
                 
                 # 重新验证结果
                 try:
@@ -128,10 +123,9 @@ def run_account(cookie_str, account_idx):
                     new_status = next((t.get('userStatus') for t in verify_res.get('results', {}).get('items', []) if t.get('id') == task_id), 0)
                     
                     if new_status == 2:
-                        print("   -> 🎉 校验成功！15秒阅读完成，积分已到账。", flush=True)
+                        print("   -> 🎉 校验成功！积分已到账。", flush=True)
                         success_count += 1
                         summary += f"- ✅ 成功阅读并认领奖励: **{task_title}**\n\n"
-                        # ✨ 移除了一旦成功就强制 break 的错误逻辑，允许循环继续
                     else:
                         print("   -> ❌ 校验失败：可能倒计时被暂停或触发强风控。", flush=True)
                 except Exception as e:
