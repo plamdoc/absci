@@ -1,4 +1,4 @@
-name: 京东自动化任务脚本
+name: JD-yaoniguan
 
 on:
   workflow_dispatch: # 允许你在 GitHub Actions 页面手动点击运行
