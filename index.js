@@ -2,7 +2,7 @@ const puppeteer = require('puppeteer');
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 (async () => {
-    console.log("🚀 [V10 暴力刷新版] 开始执行京东自动化任务...");
+    console.log("🚀 [V11 毁灭重生版] 开始执行京东自动化任务...");
 
     const rawCookie = process.env.JD_COOKIE;
     if (!rawCookie) {
@@ -24,43 +24,42 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
         ]
     });
 
+    // ⭐ 核心绝招：创建一个全新的干净页面（彻底解决页面跳转导致的报错）
+    async function createFreshPage() {
+        const pages = await browser.pages();
+        // 关掉所有旧页面
+        for (let p of pages) {
+            await p.close().catch(() => {});
+        }
+        const newPage = await browser.newPage();
+        await newPage.setDefaultNavigationTimeout(60000); 
+        await newPage.setViewport({ width: 390, height: 844, isMobile: true });
+        await newPage.setCookie(...cookies);
+        await newPage.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1');
+        return newPage;
+    }
+
     try {
-        const page = await browser.newPage();
-        page.setDefaultNavigationTimeout(60000); 
-        await page.setViewport({ width: 390, height: 844, isMobile: true });
-        await page.setCookie(...cookies);
-        await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1');
+        let page = await createFreshPage();
+        console.log("🌐 正在首次进入京东互动主页...");
+        await page.goto('https://interact.jd.com/', { waitUntil: 'domcontentloaded' }).catch(()=>{});
+        await sleep(5000); 
 
         let loopCount = 0;
 
-        // 核心死循环，最大执行 60 次
         while (loopCount < 60) {
             loopCount++;
             console.log(`\n🔄 === 第 ${loopCount} 轮扫描 ===`);
 
             try {
-                // 1. 【按你说的】确保只有主页面，并且强行回到主活动页
-                const pages = await browser.pages();
-                if (pages.length > 1) {
-                    for (let i = 1; i < pages.length; i++) await pages[i].close();
-                    await pages[0].bringToFront();
-                }
-
-                const currentUrl = await page.url();
-                if (!currentUrl.includes('interact.jd.com')) {
-                    console.log("🌐 正在(重新)进入京东互动主页...");
-                    await page.goto('https://interact.jd.com/', { waitUntil: 'domcontentloaded' }).catch(()=>{});
-                    await sleep(4000); 
-                }
-
-                // 2. 检测终极结束标志
+                // 1. 检测结束标志
                 const isFinished = await page.evaluate(() => document.body.innerText.includes('抽奖次数已用完'));
                 if (isFinished) {
                     console.log("🎉 页面提示【抽奖次数已用完】，今日任务圆满收工！");
                     break;
                 }
 
-                // 3. 点掉所有弹窗
+                // 2. 点掉所有可见弹窗
                 const popup = await page.evaluate(() => {
                     const isVisible = (elem) => elem && elem.getBoundingClientRect().width > 0;
                     const close = document.querySelector('.close-icon');
@@ -75,9 +74,8 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
                     continue;
                 }
 
-                // 4. 【按你说的】直接找红色框框任务按钮
+                // 3. 【按你的思路】直接找红色框框，点完就跑
                 const taskResult = await page.evaluate(() => {
-                    // 直接找你截图中出现的 class="common-btn btn undone"
                     const btn = document.querySelector('.common-btn.btn.undone');
                     if (btn && btn.getBoundingClientRect().width > 0) {
                         const txt = btn.innerText.trim();
@@ -88,20 +86,20 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
                 });
 
                 if (taskResult) {
-                    console.log(`🚀 点击红色任务框：【${taskResult}】！死等 8 秒...`);
+                    console.log(`🚀 成功点击红框任务：【${taskResult}】！死等 8 秒...`);
                     await sleep(8000);
                     
-                    // ⭐ 核心精髓：不管刚才点击后页面跳去了哪里，直接强制重新加载主页！
-                    console.log("🔄 8秒结束，强制重新加载主页，消灭一切跳转！");
+                    // ⭐ 绝杀：不管页面跳转去哪了，直接销毁当前页面，重新建一个全新的打开主页！
+                    console.log("🔥 任务完成！为防止跳转报错，正在销毁并重新打开页面...");
+                    page = await createFreshPage();
                     await page.goto('https://interact.jd.com/', { waitUntil: 'domcontentloaded' }).catch(()=>{});
-                    await sleep(3000);
+                    await sleep(5000);
                     continue;
                 }
 
-                // 5. 如果看不到红框框，点开面板
+                // 4. 找面板按钮展开
                 const panel = await page.evaluate(() => {
-                    const btns = Array.from(document.querySelectorAll('div, span, button'));
-                    const earnBtn = btns.find(el => el.innerText && el.innerText.trim() === '赚更多京豆' && el.getBoundingClientRect().width > 0);
+                    const earnBtn = Array.from(document.querySelectorAll('div, span, button')).find(el => el.innerText && el.innerText.trim() === '赚更多京豆' && el.getBoundingClientRect().width > 0);
                     if (earnBtn) { earnBtn.click(); return true; }
                     return false;
                 });
@@ -111,7 +109,7 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
                     continue;
                 }
 
-                // 6. 去抽奖
+                // 5. 点击抽奖
                 const drawResult = await page.evaluate(() => {
                     const pointer = document.querySelector('.pointer');
                     const count = document.querySelector('.lottery-count');
@@ -124,14 +122,15 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
                 });
 
                 if (drawResult === 'EMPTY') {
-                    console.log("🎉 剩余抽奖0次，结束！");
+                    console.log("🎉 剩余抽奖0次，今日结束！");
                     break;
                 } else if (drawResult === 'CLICKED') {
-                    console.log("🎰 点击抽奖！死等 6 秒开奖动画...");
+                    console.log("🎰 点击抽奖！等待 6 秒...");
                     await sleep(6000);
-                    // 抽完奖也强制刷新，防止弹窗卡死
+                    console.log("🔥 抽完奖！为防止意外卡死，正在销毁并重新打开页面...");
+                    page = await createFreshPage();
                     await page.goto('https://interact.jd.com/', { waitUntil: 'domcontentloaded' }).catch(()=>{});
-                    await sleep(3000);
+                    await sleep(5000);
                     continue;
                 }
 
@@ -139,11 +138,12 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
                 await sleep(3000);
 
             } catch (err) {
-                // ⭐ 捕获一切报错（包括 Detached Frame）
-                console.log(`⚠️ 页面发生跳转导致失去连接 (忽略此报错): ${err.message.split('\n')[0]}`);
-                console.log("🔧 正在进行容错处理，即将强制刷新重置...");
-                await sleep(2000);
-                // 报错也没关系，循环会自动回到第 1 步，强行 goto 重开页面！
+                // ⭐ 终极防具：如果遇到任何意料之外的报错（比如网络断了一下，或者元素没找到）
+                console.log(`⚠️ 捕获到底层异常跳出: ${err.message.split('\n')[0]}`);
+                console.log("🔧 触发终极防御机制：直接销毁当前整个页面并重生！");
+                page = await createFreshPage();
+                await page.goto('https://interact.jd.com/', { waitUntil: 'domcontentloaded' }).catch(()=>{});
+                await sleep(5000);
             }
         }
         console.log("✅ 自动化流程完美结束。");
