@@ -1,0 +1,29 @@
+name: 京东自动化任务脚本
+
+on:
+  workflow_dispatch: # 允许你在 GitHub Actions 页面手动点击运行
+  schedule:
+    # 定时任务，使用 UTC 时间。
+    # 这里的 01 00 * * * 代表 UTC 时间的凌晨 1 点（相当于北京时间早上 9 点）
+    - cron: '0 1 * * *' 
+
+jobs:
+  run-jd-task:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v3
+
+    - name: 设置 Node.js 环境
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+
+    - name: 安装依赖
+      run: npm install
+
+    - name: 执行自动化脚本
+      env:
+        JD_COOKIE: ${{ secrets.JD_COOKIE }} # 从 Secrets 注入你的 Cookie
+      run: npm start
