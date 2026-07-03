@@ -3,11 +3,11 @@ const puppeteer = require('puppeteer');
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 (async () => {
-    console.log("🚀 [V6 稳定版] 开始初始化京东自动化任务...");
+    console.log("🚀 [V7 破壁版] 开始初始化京东自动化任务...");
 
     const rawCookie = process.env.JD_COOKIE;
     if (!rawCookie) {
-        console.error("❌ 严重错误：未找到 JD_COOKIE 环境变量！");
+        console.error("❌ 未找到 JD_COOKIE，退出！");
         process.exit(1);
     }
 
@@ -36,56 +36,48 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
         console.log("🌐 正在打开京东互动页面...");
         await page.goto('https://interact.jd.com/', { waitUntil: 'domcontentloaded' });
-        await sleep(5000); 
+        await sleep(4000); 
 
+        // 检测拦截
         const currentUrl = await page.url();
         if (currentUrl.includes('login') || currentUrl.includes('plogin')) {
-            console.error("❌ 致命错误：JD_COOKIE 失效被拦截到登录页！请重新抓取。");
+            console.error("❌ Cookie 已失效被拦截到登录页！");
             await browser.close();
             process.exit(1);
         }
 
-        console.log("🤖 页面加载成功，开启智能防卡死循环...");
+        console.log("🤖 页面初步加载成功，正在执行页面滑动以触发懒加载...");
+        
+        // 关键动作：模拟真人往下滑动，再滑回顶部，唤醒所有隐藏的 API 请求
+        await page.evaluate(() => window.scrollBy(0, 800));
+        await sleep(1500);
+        await page.evaluate(() => window.scrollBy(0, 800));
+        await sleep(1500);
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await sleep(2000);
+
+        console.log("👀 准备就绪，开始扫描目标...");
 
         let safeCounter = 0; 
-        let hasClickedEarnMore = false;
+        let emptyRoundCount = 0; // 记录连续什么都没找到的次数
 
         while (safeCounter < 60) {
             safeCounter++;
-            console.log(`\n🔍 --- 正在进行第 ${safeCounter} 轮扫描 ---`);
+            console.log(`\n🔍 --- 第 ${safeCounter} 轮扫描 ---`);
 
-            // ⭐ 修复点：强化版弹窗处理（加入真实可见性检测）
+            // ⭐ 1. 查杀弹窗 (使用更兼容的 getBoundingClientRect 判断可见性)
             const popupText = await page.evaluate(() => {
-                // 判断元素是否在屏幕上真实可见的函数
-                const isVisible = (elem) => {
-                    if (!elem) return false;
-                    const style = window.getComputedStyle(elem);
-                    return style.display !== 'none' && 
-                           style.visibility !== 'hidden' && 
-                           style.opacity !== '0' && 
-                           elem.offsetWidth > 0 && 
-                           elem.offsetHeight > 0;
-                };
+                const isVisible = (elem) => elem && elem.getBoundingClientRect().width > 0;
 
-                // 1. 先按类名找弹窗按钮，必须可见才点
                 const acceptBtn = document.querySelector('.accept');
-                if (isVisible(acceptBtn)) {
-                    acceptBtn.click();
-                    return '开心收下(Class)';
-                }
+                if (isVisible(acceptBtn)) { acceptBtn.click(); return '开心收下(类名)'; }
                 
                 const closeIcon = document.querySelector('.close-icon');
-                if (isVisible(closeIcon)) {
-                    closeIcon.click();
-                    return '关闭按钮(Icon)';
-                }
+                if (isVisible(closeIcon)) { closeIcon.click(); return '关闭(图标)'; }
 
-                // 2. 按文本找弹窗按钮，必须可见才点
                 const btns = Array.from(document.querySelectorAll('div, span, button'));
                 const textBtn = btns.find(el => 
-                    el.innerText && 
-                    ['开心收下', '我知道了', '去使用', '继续抽', '开心收下吧'].includes(el.innerText.trim()) && 
-                    isVisible(el)
+                    el.innerText && ['开心收下', '我知道了', '去使用', '继续抽'].includes(el.innerText.trim()) && isVisible(el)
                 );
                 
                 if (textBtn) {
@@ -97,67 +89,62 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
             });
 
             if (popupText) {
-                console.log(`🎁 成功清理真实可见弹窗：【${popupText}】，等待 2 秒...`);
+                console.log(`🎁 成功清理弹窗：【${popupText}】，等待 2 秒...`);
+                emptyRoundCount = 0;
                 await sleep(2000);
                 continue; 
             }
 
-            // ⭐ 展开面板
-            if (!hasClickedEarnMore) {
-                const earnMoreHandled = await page.evaluate(() => {
-                    const btns = Array.from(document.querySelectorAll('div, span, button'));
-                    const btn = btns.find(el => el.innerText && el.innerText.trim() === '赚更多京豆');
-                    if (btn && btn.offsetWidth > 0) { // 同样加入可见判断
-                        btn.click();
-                        return true;
-                    }
-                    return false;
-                });
-                if (earnMoreHandled) {
-                    console.log("💰 已点击【赚更多京豆】，展开任务列表...");
-                    hasClickedEarnMore = true;
-                    await sleep(2500);
-                    continue;
+            // ⭐ 2. 查找并执行任务 (双管齐下：类名匹配 + 文本匹配)
+            const taskInfo = await page.evaluate(() => {
+                const isVisible = (elem) => elem && elem.getBoundingClientRect().width > 0;
+                
+                // 方式 A：用你找的精确类名
+                const preciseTask = document.querySelector('.common-btn.btn.undone');
+                if (isVisible(preciseTask)) {
+                    const txt = preciseTask.innerText.trim();
+                    preciseTask.click();
+                    return txt;
                 }
-            }
 
-            // ⭐ 执行任务
-            const taskText = await page.evaluate(() => {
-                const taskBtn = document.querySelector('.common-btn.btn.undone');
-                // 确保任务按钮也是可见的
-                if (taskBtn && taskBtn.offsetWidth > 0) {
-                    const text = taskBtn.innerText.trim();
-                    taskBtn.click();
-                    return text;
+                // 方式 B：兜底文本查找
+                const btns = Array.from(document.querySelectorAll('div, span, button'));
+                const textTask = btns.find(el => {
+                    const txt = el.innerText ? el.innerText.trim() : '';
+                    return ['去完成', '去浏览', '去关注', '逛一逛'].includes(txt) && isVisible(el);
+                });
+                
+                if (textTask) {
+                    const txt = textTask.innerText.trim();
+                    textTask.click();
+                    return txt;
                 }
+                
                 return null;
             });
 
-            if (taskText) {
-                console.log(`🚀 发现任务【${taskText}】，强制等待 8 秒执行...`);
+            if (taskInfo) {
+                console.log(`🚀 发现并点击任务：【${taskInfo}】！强制死等 8 秒...`);
+                emptyRoundCount = 0;
                 await sleep(8000); 
 
                 const pages = await browser.pages();
                 if (pages.length > 1) {
-                    console.log(`🧹 正在关闭 ${pages.length - 1} 个多余任务页面...`);
-                    for (let i = 1; i < pages.length; i++) {
-                        await pages[i].close();
-                    }
+                    console.log(`🧹 正在关闭 ${pages.length - 1} 个广告页面...`);
+                    for (let i = 1; i < pages.length; i++) await pages[i].close();
                     await pages[0].bringToFront(); 
                     await sleep(1500);
                 }
                 continue; 
             }
 
-            // ⭐ 抽奖判定
+            // ⭐ 3. 抽奖判定
             const drawState = await page.evaluate(() => {
                 const countDiv = document.querySelector('.lottery-count');
                 const pointerBtn = document.querySelector('.pointer');
                 
-                if (countDiv && countDiv.innerText.replace(/\s+/g, '') === '剩余0次') {
-                    return 'EMPTY'; 
-                }
-                if (pointerBtn && pointerBtn.offsetWidth > 0) { // 抽奖按钮也要可见
+                if (countDiv && countDiv.innerText.replace(/\s+/g, '') === '剩余0次') return 'EMPTY'; 
+                if (pointerBtn && pointerBtn.getBoundingClientRect().width > 0) {
                     pointerBtn.click();
                     return 'CLICKED';
                 }
@@ -165,24 +152,35 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
             });
 
             if (drawState === 'EMPTY') {
-                console.log("🎉 扫描完毕：抽奖【剩余0次】。今日任务圆满结束！");
+                console.log("🎉 扫描完毕：抽奖【剩余0次】。今日任务彻底圆满结束！");
                 break; 
             } else if (drawState === 'CLICKED') {
-                console.log("🎰 已点击【立即开奖】！等待 6 秒...");
+                console.log("🎰 已点击【立即开奖】！等待 6 秒动画...");
+                emptyRoundCount = 0;
                 await sleep(6000);
                 continue;
             }
 
-            console.log("💤 暂无匹配目标，等待 3 秒后进入下一轮...");
+            // ⭐ 4. 兜底与防卡死诊断
+            emptyRoundCount++;
+            console.log(`💤 暂无匹配目标 (连续 ${emptyRoundCount} 次未找到)，等待 3 秒...`);
             await sleep(3000);
+
+            // 如果连续 5 次什么都没找到，说明可能卡在某个奇怪的遮罩层了，随便点一下空白处并往下滑一点
+            if (emptyRoundCount >= 5) {
+                console.log("⚠️ 尝试强行唤醒页面 (点击空白处并滚动)...");
+                await page.mouse.click(10, 10);
+                await page.evaluate(() => window.scrollBy(0, 300));
+                emptyRoundCount = 0; // 重置计数器
+            }
         }
 
-        console.log("✅ 自动化流程执行完毕。");
+        console.log("✅ 自动化流程运行完毕。");
 
     } catch (error) {
-        console.error("❌ 运行中发生错误:", error);
+        console.error("❌ 运行中发生报错:", error);
     } finally {
-        console.log("🧹 正在清理浏览器资源...");
+        console.log("🧹 清理并退出浏览器...");
         await browser.close();
     }
 })();
