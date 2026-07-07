@@ -79,45 +79,55 @@ def run_account(cookie_str, account_idx):
                 content_url = task.get('contentUrl', '')
                 print(f"[{i+1}/{len(todo_tasks)}] 📖 正在模拟阅读: {task_title}", flush=True)
                 
-                # 第一步：快速触发 linkTask，并直接盲点二次确认按钮
+                # 第一步：进入任务引导页并等待 DOM 稳定
                 try:
-                    # 使用 domcontentloaded 代替默认的 load，加快第一跳速度
                     page.goto(f"https://hao.dxy.cn/plus/activity/linkTask/{task_id}", timeout=10000, wait_until="domcontentloaded")
-                    # 直接无脑点「去阅读」，不浪费时间判断，最多等 3 秒
-                    page.locator('text="去阅读"').last.click(timeout=3000)
+                    page.wait_for_timeout(1000) 
+
+                    # 第二步：点击去阅读，并尝试捕获可能弹出的新标签页
+                    with context.expect_page(timeout=5000) as new_page_info:
+                        page.locator('text="去阅读"').last.click(timeout=3000)
+                    
+                    # 成功捕获到新标签页，切换操作句柄
+                    target_page = new_page_info.value
+                    target_page.wait_for_load_state("domcontentloaded", timeout=5000)
+
                 except Exception:
-                    pass 
-                
-                # 第二步：如果有明确的文章地址，强制转入
-                if content_url and "dxy.cn" in content_url:
-                    try:
-                        page.goto(content_url, timeout=10000, wait_until="domcontentloaded")
-                    except Exception:
-                        pass
-                
-                # 第三步：等待基础 DOM 加载完毕，不再苦等 networkidle
+                    # 兜底：如果没有弹出新标签页，继续使用原页面
+                    target_page = page
+                    # 只有在没有自然跳转时，才使用 content_url 强制兜底跳转
+                    if content_url and "dxy.cn" in content_url and page.url not in content_url:
+                        try:
+                            target_page.goto(content_url, timeout=10000, wait_until="domcontentloaded")
+                        except Exception:
+                            pass
+
+                # 第三步：防风控注入 - 强制修改页面可见性状态，防止后台倒计时暂停
                 try:
-                    page.wait_for_load_state("domcontentloaded", timeout=3000)
+                    target_page.evaluate("""
+                        Object.defineProperty(document, 'visibilityState', {get: () => 'visible'});
+                        Object.defineProperty(document, 'hidden', {get: () => false});
+                    """)
+                    print(f"   -> 落地页面标题: {target_page.title()}", flush=True)
                 except Exception:
                     pass
                 
-                try:
-                    print(f"   -> 落地页面标题: {page.title()}", flush=True)
-                except Exception:
-                    pass
-                
-                # 第四步：物理级鼠标滚轮模拟 (压缩时长：共 6次 * 3秒 = 18秒，稳过15秒且更快)
+                # 第四步：在目标页面进行物理级鼠标滚轮模拟 (共约 18 秒)
                 for step in range(6):
                     try:
                         if step < 4:
-                            page.mouse.wheel(0, 500)  # 向下滚
+                            target_page.mouse.wheel(0, 500)  # 向下滚
                         else:
-                            page.mouse.wheel(0, -300) # 回滚一下，模拟看完
+                            target_page.mouse.wheel(0, -300) # 回滚一下
                     except Exception:
                         pass
-                    page.wait_for_timeout(3000)
+                    target_page.wait_for_timeout(3000)
                 
-                # 重新验证结果
+                # 第五步：如果产生了新标签页，阅读完毕后将其关闭，保持环境干净
+                if target_page != page:
+                    target_page.close()
+                
+                # 第六步：重新验证结果是否到账
                 try:
                     verify_res = requests.get(LIST_URL, headers=req_headers).json()
                     new_status = next((t.get('userStatus') for t in verify_res.get('results', {}).get('items', []) if t.get('id') == task_id), 0)
@@ -145,7 +155,7 @@ if __name__ == "__main__":
     cookies = [c.strip() for c in cookie_env.split('\n') if c.strip()]
     
     if not cookies:
-        print("❌ 未找到 DXY_COOKIE，请检查 Secrets 配置。", flush=True)
+        print("❌ 未找到 DXY_COOKIE，请检查环境变量配置。", flush=True)
     else:
         print(f"🚀 检测到 {len(cookies)} 个丁香园账号，准备开始执行...", flush=True)
         
