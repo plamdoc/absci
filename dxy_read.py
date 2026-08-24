@@ -4,7 +4,7 @@ import requests
 from playwright.sync_api import sync_playwright
 
 LIST_URL = "https://hao.dxy.cn/api/client/proxy/api/stats/client/session/task/activity/list?taskType=2&pageNo=1&pageSize=15&reset=true"
-MAX_CLICKS = 20  # 每次最多阅读 5 个
+MAX_CLICKS = 20  # 每次最多阅读 20 个
 
 def send_serverchan(sckey, title, desp):
     """Server酱推送模块"""
