@@ -8,7 +8,7 @@ AbleSci自动签到脚本
 创建日期：2025年8月8日
 更新日期：2025年9月2日 >> 修复日志输出时间为北京时间 ; 修复签到前后用户信息显示 ; 优化登录失败处理 ; 优化签到已签到处理
 更新日期：2025年9月3日 >> 保护隐私，不在日志中显示完整邮箱和用户名
-更新日期：2026年3月22日 >> 支持本地.env文件; 使用zoneinfo/pytz处理时区; 统一通知器; 修复zoneinfo时区查找失败问题,增加回退机制; 修复已签到处理逻辑; 
+更新日期：2026年3月22日 >> 支持本地.env文件; 使用zoneinfo/pytz处理时区; 统一通知器; 修复zoneinfo时区查找失败问题,增加回退机制; 修复已签到处理逻辑;\n更新日期：2026年9月18日 >> 兼容新版登录页CSRF获取；增加登录调试信息；更新GitHub Actions输出写法；避免日志打印账号密码原文；
 作者：daitcl
 """
 
@@ -208,71 +208,251 @@ class AbleSciAuto:
         self.notifier.log(message, level)
         
     def get_csrf_token(self):
-        """获取CSRF令牌"""
+        """获取CSRF令牌，兼容新版/旧版科研通登录页"""
         login_url = "https://www.ablesci.com/site/login"
+
+        # 首次访问登录页时不要强制声明 AJAX 请求，尽量模拟正常浏览器打开页面
+        page_headers = {
+            "User-Agent": self.headers.get("User-Agent", ""),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": "https://www.ablesci.com/",
+            "Connection": "keep-alive",
+        }
+
         try:
-            response = self.session.get(login_url, headers=self.headers, timeout=30)
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                csrf_token = soup.find('input', {'name': '_csrf'})
-                if csrf_token:
-                    return csrf_token.get('value', '')
-            else:
-                self.log(f"获取CSRF令牌失败，状态码: {response.status_code}", "error")
+            response = self.session.get(
+                login_url,
+                headers=page_headers,
+                timeout=30,
+                allow_redirects=True
+            )
+
+            self.log(
+                f"登录页状态码: {response.status_code}，最终URL: {response.url}",
+                "info"
+            )
+
+            if response.status_code != 200:
+                self.log(
+                    f"获取CSRF令牌失败，状态码: {response.status_code}",
+                    "error"
+                )
+                return ""
+
+            soup = BeautifulSoup(response.text, "html.parser")
+            csrf_token = ""
+
+            # 1. 新版常见形式：
+            # <meta name="csrf-token" content="...">
+            meta_csrf = soup.find("meta", attrs={"name": "csrf-token"})
+            if meta_csrf:
+                csrf_token = (meta_csrf.get("content") or "").strip()
+
+            # 2. 兼容部分框架使用 csrfToken / _csrf-token
+            if not csrf_token:
+                for meta_name in ("csrfToken", "_csrf-token", "csrf"):
+                    meta_tag = soup.find("meta", attrs={"name": meta_name})
+                    if meta_tag:
+                        csrf_token = (meta_tag.get("content") or "").strip()
+                        if csrf_token:
+                            break
+
+            # 3. 兼容旧版：
+            # <input type="hidden" name="_csrf" value="...">
+            if not csrf_token:
+                input_csrf = soup.find("input", attrs={"name": "_csrf"})
+                if input_csrf:
+                    csrf_token = (input_csrf.get("value") or "").strip()
+
+            # 4. 再兼容其他常见隐藏字段命名
+            if not csrf_token:
+                for input_name in ("csrf_token", "csrf-token", "csrf"):
+                    input_tag = soup.find("input", attrs={"name": input_name})
+                    if input_tag:
+                        csrf_token = (input_tag.get("value") or "").strip()
+                        if csrf_token:
+                            break
+
+            if csrf_token:
+                self.log(
+                    f"成功获取CSRF令牌，长度: {len(csrf_token)}",
+                    "success"
+                )
+                return csrf_token
+
+            # 找不到时输出不含密码的诊断信息，方便从 GitHub Actions 日志判断
+            page_title = "未知"
+            if soup.title and soup.title.string:
+                page_title = soup.title.string.strip()
+
+            self.log(
+                f"未在登录页中找到CSRF令牌；页面标题: {page_title}",
+                "error"
+            )
+            self.log(
+                f"登录页响应长度: {len(response.text)} 字符",
+                "warning"
+            )
+
+            # 只显示前 300 个字符，且压成一行；不输出账号密码
+            preview = " ".join(response.text[:300].split())
+            if preview:
+                self.log(f"页面内容预览: {preview}", "warning")
+
+            # 输出收到的 Cookie 名称，便于判断网站是否改为 Cookie CSRF
+            cookie_names = [cookie.name for cookie in self.session.cookies]
+            if cookie_names:
+                self.log(
+                    "当前会话Cookie名称: " + ", ".join(cookie_names),
+                    "info"
+                )
+
+            return ""
+
+        except requests.RequestException as e:
+            self.log(
+                f"获取CSRF令牌网络请求失败: {type(e).__name__}: {str(e)}",
+                "error"
+            )
         except Exception as e:
-            self.log(f"获取CSRF令牌时出错: {str(e)}", "error")
-        return ''
+            self.log(
+                f"获取CSRF令牌时出错: {type(e).__name__}: {str(e)}",
+                "error"
+            )
+
+        return ""
 
     def login(self):
         """执行登录操作"""
         if not self.email or not self.password:
             self.log("邮箱或密码为空", "error")
             return False
-            
+
         login_url = "https://www.ablesci.com/site/login"
         csrf_token = self.get_csrf_token()
-        
+
         if not csrf_token:
             self.log("无法获取CSRF令牌", "error")
             return False
-        
+
+        # 保留原脚本字段，兼容旧版登录接口
         login_data = {
             "_csrf": csrf_token,
             "email": self.email,
             "password": self.password,
             "remember": "off"
         }
-        
+
+        # POST 登录时增加 CSRF 请求头，兼容新版 AJAX 登录
         headers = self.headers.copy()
-        headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8"
-        headers["Referer"] = "https://www.ablesci.com/site/login"
-        
+        headers.update({
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Referer": "https://www.ablesci.com/site/login",
+            "Origin": "https://www.ablesci.com",
+            "X-CSRF-Token": csrf_token,
+            "X-Requested-With": "XMLHttpRequest",
+        })
+
         try:
             response = self.session.post(
                 login_url,
                 data=login_data,
                 headers=headers,
-                timeout=30
+                timeout=30,
+                allow_redirects=True
             )
-            
-            if response.status_code == 200:
-                try:
-                    result = response.json()
-                    if result.get("code") == 0:
-                        self.log(f"登录成功: {result.get('msg')}", "success")
+
+            self.log(
+                f"登录请求状态码: {response.status_code}，最终URL: {response.url}",
+                "info"
+            )
+
+            if response.status_code != 200:
+                self.log(
+                    f"登录请求失败，状态码: {response.status_code}",
+                    "error"
+                )
+                return False
+
+            # 优先按 JSON 解析
+            try:
+                result = response.json()
+
+                if result.get("code") == 0:
+                    self.log(
+                        f"登录成功: {result.get('msg', '账户验证通过')}",
+                        "success"
+                    )
+                    return True
+
+                self.log(
+                    f"登录失败: {result.get('msg', result)}",
+                    "error"
+                )
+                return False
+
+            except (json.JSONDecodeError, ValueError):
+                # 如果服务器返回 HTML，则结合页面内容和登录态再次判断
+                body = response.text or ""
+
+                # 旧版常见成功判断
+                if "退出" in body or "登录成功" in body:
+                    self.log("登录成功", "success")
+                    return True
+
+                # 再访问首页，用页面内容确认 Session 是否已经处于登录状态
+                verify_headers = {
+                    "User-Agent": self.headers.get("User-Agent", ""),
+                    "Referer": "https://www.ablesci.com/site/login",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                }
+
+                verify = self.session.get(
+                    "https://www.ablesci.com/",
+                    headers=verify_headers,
+                    timeout=30,
+                    allow_redirects=True
+                )
+
+                if verify.status_code == 200:
+                    verify_soup = BeautifulSoup(verify.text, "html.parser")
+
+                    # 原脚本首页登录后的用户名元素
+                    username_element = verify_soup.select_one(
+                        ".mobile-hide.able-head-user-vip-username"
+                    )
+
+                    # 页面出现“退出”通常也意味着已登录
+                    if username_element or "退出" in verify.text:
+                        self.log("登录成功（已通过首页登录状态确认）", "success")
                         return True
-                    else:
-                        self.log(f"登录失败: {result.get('msg')}", "error")
-                except json.JSONDecodeError:
-                    if "退出" in response.text:
-                        self.log("登录成功", "success")
-                        return True
-                    else:
-                        self.log("登录失败: 无法解析响应", "error")
-            else:
-                self.log(f"登录请求失败，状态码: {response.status_code}", "error")
+
+                content_type = response.headers.get("Content-Type", "")
+                self.log(
+                    f"登录失败: 返回内容无法识别；Content-Type: {content_type}",
+                    "error"
+                )
+
+                preview = " ".join(body[:300].split())
+                if preview:
+                    self.log(
+                        f"登录响应内容预览: {preview}",
+                        "warning"
+                    )
+
+        except requests.RequestException as e:
+            self.log(
+                f"登录网络请求失败: {type(e).__name__}: {str(e)}",
+                "error"
+            )
         except Exception as e:
-            self.log(f"登录过程中出错: {str(e)}", "error")
+            self.log(
+                f"登录过程中出错: {type(e).__name__}: {str(e)}",
+                "error"
+            )
+
         return False
 
     def get_user_info(self):
@@ -396,8 +576,7 @@ def get_accounts():
     if not accounts_env:
         return []
     
-    # 调试输出
-    print(f"原始账号环境变量内容: {repr(accounts_env)}")
+    # 为保护账号密码，不在日志中输出 ABLESCI_ACCOUNTS 原文
     
     accounts = []
     # 支持换行符、分号、逗号分隔
@@ -469,7 +648,13 @@ def main():
         global_notifier.send_notification()
     
     if os.getenv("GITHUB_ACTIONS") == "true":
-        print(f"::set-output name=log_content::{global_notifier.get_content()}")
+        github_output = os.getenv("GITHUB_OUTPUT")
+        if github_output:
+            content = global_notifier.get_content()
+            with open(github_output, "a", encoding="utf-8") as f:
+                f.write("log_content<<ABLESCI_EOF\n")
+                f.write(content)
+                f.write("\nABLESCI_EOF\n")
 
 if __name__ == "__main__":
     main()
